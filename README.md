@@ -151,6 +151,20 @@ If no DLLs are injected, make sure:
 - the DLL architecture matches the target app architecture
 - the target UWP app can be launched normally outside of `uwpinject`
 
+### Remote LoadLibrary timeout
+
+During injection, `uwpinject` starts a remote thread in the target process that
+calls `LoadLibraryW` for each DLL. Some UWP launcher processes can load the DLL
+successfully but still fail to signal that remote thread before the timeout.
+
+When that happens, `uwpinject` prints a warning and continues instead of
+treating the timeout as a hard injection failure. Check the injected DLL's own
+log file or debug output to confirm whether it actually ran.
+
+The old behavior could also print a second, misleading wait error after the
+timeout. That second error was caused by timeout handling falling through into
+the failure case.
+
 ## Command-line reference
 
 ```text

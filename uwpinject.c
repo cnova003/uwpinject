@@ -16,6 +16,8 @@
 
 #include <stdio.h>
 
+#define INJECT_REMOTE_THREAD_TIMEOUT_MS 30000
+
 int win32_perror(int err, wchar_t* msg) {
   int res;
   wchar_t* buf = 0;
@@ -115,7 +117,8 @@ void* win32_rwstrdup(int pid, wchar_t* s) {
 
 int win32_wait_for_remote_thread(int pid, void* routine, void* param) {
   int res = 1;
-  HANDLE remote_thread;
+  DWORD wait_res;
+  HANDLE remote_thread = 0;
   HANDLE process = win32_process(pid);
   if (!process) {
     return 0;
@@ -127,15 +130,41 @@ int win32_wait_for_remote_thread(int pid, void* routine, void* param) {
     res = 0;
     goto cleanup;
   }
-  switch (WaitForSingleObject(remote_thread, 30000)) {
+
+  /*
+   * This thread runs LoadLibraryW inside the UWP process. In the simple case,
+   * LoadLibraryW returns quickly and the thread becomes signaled.
+   *
+   * Some UWP launcher processes can load the DLL successfully but still leave
+   * this remote thread unsignaled long enough to hit our timeout. The injected
+   * DLL can prove it ran by writing its own log, so treat timeout as a warning
+   * and continue to resume the app instead of parking this debugger callback
+   * forever.
+   */
+  wait_res = WaitForSingleObject(remote_thread, INJECT_REMOTE_THREAD_TIMEOUT_MS);
+  switch (wait_res) {
     case WAIT_TIMEOUT:
       win32_perror(ERROR_TIMEOUT, L"WaitForSingleObject failed");
-      res = 0;
+      fwprintf(stderr,
+        L"warning: remote LoadLibraryW thread timed out; continuing because the DLL may have loaded successfully.\n");
+      res = 1;
+      break;
     case WAIT_FAILED:
       win32_perror(GetLastError(), L"WaitForSingleObject failed");
       res = 0;
+      break;
+    case WAIT_OBJECT_0:
+      res = 1;
+      break;
+    default:
+      fwprintf(stderr, L"WaitForSingleObject returned unexpected status [%08X]\n", wait_res);
+      res = 0;
+      break;
   }
 cleanup:
+  if (remote_thread) {
+    CloseHandle(remote_thread);
+  }
   CloseHandle(process);
   return res;
 }

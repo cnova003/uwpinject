@@ -320,7 +320,7 @@ int uwp_launch(wchar_t* app, int* pid) {
   return uwp_launch_class(class, pid);
 }
 
-int uwp_debug(wchar_t* debugger, wchar_t* app) {
+int uwp_debug(wchar_t* debugger, wchar_t* packageFullName, wchar_t* appId) {
   int res = 1;
   HRESULT hr;
   IPackageDebugSettings* settings = 0;
@@ -338,20 +338,30 @@ int uwp_debug(wchar_t* debugger, wchar_t* app) {
     goto cleanup;
   }
 
-  hr = IPackageDebugSettings_EnableDebugging(settings, app, debugger, 0);
+  /*
+   * EnableDebugging needs the PackageFullName:
+   *
+   *   Microsoft.Chelan_1.3528.0.0_x64__8wekyb3d8bbwe
+   */
+  hr = IPackageDebugSettings_EnableDebugging(settings, packageFullName, debugger, 0);
   if (FAILED(hr)) {
     win32_perror((int)hr, L"EnableDebugging failed");
     res = 0;
     goto cleanup;
   }
 
-  if (!uwp_launch(app, &pid)) {
+  /*
+   * ActivateApplication needs the AppID / AUMID:
+   *
+   *   Microsoft.Chelan_8wekyb3d8bbwe!HaloMCCShippingNoEAC
+   */
+  if (!uwp_launch_class(appId, &pid)) {
     res = 0;
     goto cleanup;
   }
 
   wprintf(L"launched as %d\n", pid);
-  hr = IPackageDebugSettings_DisableDebugging(settings, app);
+  hr = IPackageDebugSettings_DisableDebugging(settings, packageFullName);
   if (FAILED(hr)) {
     win32_perror((int)hr, L"DisableDebugging failed");
     res = 0;
@@ -377,9 +387,26 @@ void cli_printargs(int argc, wchar_t* argv[]) {
   wprintf(L"\n");
 }
 
-void cli_start(wchar_t* self, wchar_t* app) {
-  wprintf(L"starting %s in debug mode\n", app);
-  uwp_debug(self, app);
+void cli_start(wchar_t* self, wchar_t* packageFullName, wchar_t* appId) {
+  wprintf(L"package: %s\n", packageFullName);
+  wprintf(L"app id:  %s\n", appId);
+  wprintf(L"starting app in debug mode\n");
+
+  uwp_debug(self, packageFullName, appId);
+}
+
+void cli_start_legacy(wchar_t* self, wchar_t* packageFullName) {
+  WCHAR appId[512];
+
+  if (!uwp_class(packageFullName, appId, sizeof(appId))) {
+    return;
+  }
+
+  wprintf(L"package: %s\n", packageFullName);
+  wprintf(L"app id:  %s\n", appId);
+  wprintf(L"starting app in debug mode using legacy !App id\n");
+
+  uwp_debug(self, packageFullName, appId);
 }
 
 /* TODO: make this function more readable */
@@ -452,13 +479,51 @@ cleanup:
 
 int wmain(int argc, wchar_t* argv[]) {
   cli_printargs(argc, argv);
-  if (argc == 2) {
-    cli_start(argv[0], argv[1]);
-  } else if (argc >= 3) {
+
+  /*
+   * Callback mode.
+   *
+   * Windows relaunches this program as the debugger with:
+   *
+   *   uwpinject.exe -p PID
+   */
+  if (argc >= 3 && !wcscmp(argv[1], L"-p")) {
     cli_inject(argc, argv);
-  } else {
-    fwprintf(stderr, L"usage: %s full_app_name\n", argv[0]);
-    return 1;
+    return 0;
   }
-  return 0;
+
+  /*
+   * Backward-compatible launch mode:
+   *
+   *   uwpinject.exe PackageFullName
+   *
+   * This preserves the old behavior by deriving the AppID as:
+   *
+   *   PackageFamilyName!App
+   */
+  if (argc == 2) {
+    cli_start_legacy(argv[0], argv[1]);
+    return 0;
+  }
+
+  /*
+   * Explicit AppID / AUMID launch mode:
+   *
+   *   uwpinject.exe PackageFullName -a AppID
+   */
+  if (argc == 4 && !wcscmp(argv[2], L"-a")) {
+    cli_start(argv[0], argv[1], argv[3]);
+    return 0;
+  }
+
+  fwprintf(
+    stderr,
+    L"usage:\n"
+    L"  %s PackageFullName\n"
+    L"  %s PackageFullName -a AppID\n",
+    argv[0],
+    argv[0]
+  );
+
+  return 1;
 }

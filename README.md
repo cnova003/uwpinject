@@ -130,6 +130,23 @@ uwpinject/
 Before injection, `uwpinject` updates permissions so the UWP app can read the
 DLLs.
 
+## Secondary process injection
+
+Some UWP apps start through a small launcher or helper process before the real
+app process appears. `uwpinject` first injects into the suspended process that
+Windows reports through the debugger callback, then resumes the app and watches
+briefly for related secondary processes.
+
+A secondary process is considered related when either:
+
+- it is a child or descendant of the original process
+- its executable path is inside the same package directory as the original
+  process
+
+When a related secondary process appears, `uwpinject` injects the same DLLs into
+that process as well. This keeps the behavior generic; it is not tied to one
+specific game or application.
+
 ## Troubleshooting
 
 If it does not work, try running PowerShell as administrator. Injecting as a
